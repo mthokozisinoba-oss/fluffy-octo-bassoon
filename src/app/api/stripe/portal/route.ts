@@ -1,35 +1,19 @@
 import { createClient } from '@/lib/supabase/server';
 import { NextResponse } from 'next/server';
-import { stripe } from '@/lib/stripe';
+import Stripe from 'stripe';
 
-export async function POST(req: Request) {
+export async function GET(req: Request) {
   const supabase = await createClient();
-  const { data: { user } } = await supabase.auth.getUser();
+  const { data: { session } } = await supabase.auth.getSession();
+  if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
 
-  if (!user) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-  }
+  const stripeKey = process.env.STRIPE_SECRET_KEY;
+  if (!stripeKey) return NextResponse.json({ error: 'Stripe not configured' }, { status: 500 });
 
-  // Get customer ID from profile or subscriptions
-  const { data: subscription } = await supabase
-    .from('subscriptions')
-    .select('stripe_subscription_id')
-    .eq('user_id', user.id)
-    .single();
-
-  if (!subscription) {
-    return NextResponse.json({ error: 'No subscription found' }, { status: 404 });
-  }
-
-  try {
-    const sub = await stripe.subscriptions.retrieve(subscription.stripe_subscription_id);
-    const portalSession = await stripe.billingPortal.sessions.create({
-      customer: sub.customer as string,
-      return_url: `${req.headers.get('origin')}/dashboard`,
-    });
-
-    return NextResponse.json({ url: portalSession.url });
-  } catch (error: any) {
-    return NextResponse.json({ error: error.message }, { status: 500 });
-  }
+  const stripe = new Stripe(stripeKey, { apiVersion: '2025-02-24.acacia' as any });
+  const portal = await stripe.billingPortal.sessions.create({
+    customer: session.user.email || '',
+    return_url: `${process.env.NEXT_PUBLIC_SITE_URL}/dashboard`,
+  });
+  return NextResponse.json({ url: portal.url });
 }
